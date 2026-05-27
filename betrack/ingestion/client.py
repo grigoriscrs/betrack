@@ -15,6 +15,7 @@ class OddsApiClient:
         self._api_key = api_key
         self._bookmakers = bookmakers
         self._session: aiohttp.ClientSession | None = None
+        self.last_quota_remaining: str | None = None
 
     async def __aenter__(self) -> OddsApiClient:
         self._session = aiohttp.ClientSession()
@@ -30,8 +31,8 @@ class OddsApiClient:
     async def _get(self, path: str, **params: Any) -> Any:
         url = f"{BASE_URL}{path}"
         async with self._session.get(url, params=self._params(**params)) as resp:
-            remaining = resp.headers.get("x-ratelimit-remaining", "?")
-            logger.debug("GET %s status=%d quota_remaining=%s", path, resp.status, remaining)
+            self.last_quota_remaining = resp.headers.get("x-ratelimit-remaining")
+            logger.debug("GET %s status=%d quota_remaining=%s", path, resp.status, self.last_quota_remaining)
             resp.raise_for_status()
             return await resp.json()
 

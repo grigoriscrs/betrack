@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BETrack</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: "class" };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body class="bg-slate-950 text-slate-200 font-sans antialiased">
+  <div x-data="betrack()" x-init="init()" class="max-w-6xl mx-auto px-4 py-6">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center gap-3">
+        <h1 class="text-2xl font-bold tracking-tight text-white">BE<span class="text-emerald-400">Track</span></h1>
+        <span class="text-xs text-slate-500">odds discrepancy monitor</span>
+      </div>
+      <div class="flex items-center gap-2 text-xs">
+        <span class="h-2 w-2 rounded-full" :class="fresh ? 'bg-emerald-400' : 'bg-amber-400'"></span>
+        <span class="text-slate-400" x-text="lastRunLabel"></span>
+      </div>
+    </div>
+
+    <!-- Status bar -->
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-6 text-sm">
+      <template x-for="s in statusCards" :key="s.label">
+        <div class="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2">
+          <div class="text-slate-500 text-xs" x-text="s.label"></div>
+          <div class="text-white font-semibold" x-text="s.value"></div>
+        </div>
+      </template>
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex gap-1 mb-4 border-b border-slate-800">
+      <button @click="tab='live'"
+              :class="tab==='live' ? 'border-emerald-400 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'"
+              class="px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors">
+        Live Opportunities <span class="ml-1 text-xs text-slate-500" x-text="'(' + opportunities.length + ')'"></span>
+      </button>
+      <button @click="tab='history'; loadHistory()"
+              :class="tab==='history' ? 'border-emerald-400 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'"
+              class="px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors">
+        History
+      </button>
+    </div>
+
+    <!-- Live tab -->
+    <div x-show="tab==='live'">
+      <template x-if="opportunities.length === 0">
+        <div class="text-center text-slate-500 py-16 text-sm">
+          No active opportunities right now. The poller checks every <span x-text="Math.round((status.poll_interval||180)/60)"></span> min.
+        </div>
+      </template>
+      <div x-show="opportunities.length > 0" class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-slate-500 text-xs uppercase tracking-wider border-b border-slate-800">
+              <th class="py-2 pr-3">Type</th>
+              <th class="py-2 pr-3">Event</th>
+              <th class="py-2 pr-3">Market</th>
+              <th class="py-2 pr-3">Outcome</th>
+              <th class="py-2 pr-3 text-right">Ref</th>
+              <th class="py-2 pr-3 text-right">Book</th>
+              <th class="py-2 pr-3 text-right">Edge</th>
+              <th class="py-2 pr-3 text-right">Seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="o in opportunities" :key="o.id">
+              <tr class="border-b border-slate-900 hover:bg-slate-900/50">
+                <td class="py-2 pr-3">
+                  <span class="text-xs px-1.5 py-0.5 rounded"
+                        :class="o.kind==='arb' ? 'bg-purple-900/60 text-purple-300' : 'bg-emerald-900/60 text-emerald-300'"
+                        x-text="o.kind==='arb' ? 'ARB' : 'VALUE'"></span>
+                  <span x-show="o.alerted" title="Confirmed (persistence + cooldown passed)" class="ml-1 text-amber-400">★</span>
+                </td>
+                <td class="py-2 pr-3">
+                  <div class="text-white" x-text="o.event_label"></div>
+                  <div class="text-xs text-slate-500" x-text="o.competition"></div>
+                </td>
+                <td class="py-2 pr-3 text-slate-300" x-text="o.market_label"></td>
+                <td class="py-2 pr-3 text-slate-300">
+                  <span x-show="o.kind==='value'" x-text="o.outcome_label"></span>
+                  <template x-if="o.kind==='arb'">
+                    <div class="text-xs space-y-0.5">
+                      <template x-for="(leg, name) in o.legs" :key="name">
+                        <div><span class="text-slate-400" x-text="name"></span>: <span x-text="leg.bookmaker + ' @ ' + leg.odds"></span></div>
+                      </template>
+                    </div>
+                  </template>
+                </td>
+                <td class="py-2 pr-3 text-right text-slate-400" x-text="o.kind==='value' ? fmtOdds(o.reference_odds) : '—'"></td>
+                <td class="py-2 pr-3 text-right text-white" x-text="o.kind==='value' ? fmtOdds(o.bookmaker_odds) : '—'"></td>
+                <td class="py-2 pr-3 text-right font-semibold"
+                    :class="edgeValue(o) >= 0.05 ? 'text-emerald-400' : 'text-emerald-300'"
+                    x-text="fmtPct(edgeValue(o))"></td>
+                <td class="py-2 pr-3 text-right text-slate-500 text-xs" x-text="fmtDuration(o.duration_seconds)"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- History tab -->
+    <div x-show="tab==='history'">
+      <template x-if="history.length === 0">
+        <div class="text-center text-slate-500 py-16 text-sm">No history recorded yet.</div>
+      </template>
+      <div x-show="history.length > 0" class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-slate-500 text-xs uppercase tracking-wider border-b border-slate-800">
+              <th class="py-2 pr-3">Status</th>
+              <th class="py-2 pr-3">Type</th>
+              <th class="py-2 pr-3">Event</th>
+              <th class="py-2 pr-3">Market</th>
+              <th class="py-2 pr-3">Outcome</th>
+              <th class="py-2 pr-3 text-right">Edge</th>
+              <th class="py-2 pr-3 text-right">Duration</th>
+              <th class="py-2 pr-3 text-right">Last seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="o in history" :key="o.id">
+              <tr class="border-b border-slate-900 hover:bg-slate-900/50">
+                <td class="py-2 pr-3">
+                  <span class="text-xs px-1.5 py-0.5 rounded"
+                        :class="o.active ? 'bg-emerald-900/60 text-emerald-300' : 'bg-slate-800 text-slate-500'"
+                        x-text="o.active ? 'ACTIVE' : 'expired'"></span>
+                </td>
+                <td class="py-2 pr-3 text-xs" :class="o.kind==='arb' ? 'text-purple-300' : 'text-emerald-300'" x-text="o.kind.toUpperCase()"></td>
+                <td class="py-2 pr-3">
+                  <div class="text-slate-200" x-text="o.event_label"></div>
+                  <div class="text-xs text-slate-600" x-text="o.competition"></div>
+                </td>
+                <td class="py-2 pr-3 text-slate-400" x-text="o.market_label"></td>
+                <td class="py-2 pr-3 text-slate-400" x-text="o.outcome_label || '1X2'"></td>
+                <td class="py-2 pr-3 text-right text-slate-300" x-text="fmtPct(edgeValue(o))"></td>
+                <td class="py-2 pr-3 text-right text-slate-500 text-xs" x-text="fmtDuration(o.duration_seconds)"></td>
+                <td class="py-2 pr-3 text-right text-slate-500 text-xs" x-text="fmtTime(o.last_seen)"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <p class="text-xs text-slate-600 mt-8">
+      Reference line: <span x-text="status.reference"></span> (soft stand-in for a sharp line). Data via odds-api.io free tier.
+    </p>
+  </div>
+
+  <script>
+    function betrack() {
+      return {
+        tab: "live",
+        opportunities: [],
+        history: [],
+        status: {},
+        now: Date.now(),
+
+        init() {
+          this.refresh();
+          setInterval(() => { this.now = Date.now(); this.refresh(); }, 5000);
+        },
+
+        async refresh() {
+          try {
+            const [opps, st] = await Promise.all([
+              fetch("/api/opportunities").then(r => r.json()),
+              fetch("/api/status").then(r => r.json()),
+            ]);
+            this.opportunities = opps;
+            this.status = st;
+            if (this.tab === "history") this.loadHistory();
+          } catch (e) { /* transient; keep last good state */ }
+        },
+
+        async loadHistory() {
+          try { this.history = await fetch("/api/history?limit=100").then(r => r.json()); }
+          catch (e) {}
+        },
+
+        get fresh() {
+          if (!this.status.last_run) return false;
+          return (Date.now() - new Date(this.status.last_run).getTime()) < (this.status.poll_interval + 60) * 1000;
+        },
+
+        get lastRunLabel() {
+          if (!this.status.last_run) return "waiting for first cycle…";
+          return "updated " + this.fmtAgo(this.status.last_run);
+        },
+
+        get statusCards() {
+          const s = this.status;
+          return [
+            { label: "Live events", value: s.live ?? "–" },
+            { label: "Prematch", value: s.prematch ?? "–" },
+            { label: "Covered", value: (s.covered ?? "–") + " / " + (s.scanned ?? "–") },
+            { label: "Quota left", value: s.quota_remaining ?? "–" },
+            { label: "Bookmakers", value: (s.bookmakers || []).join(", ") },
+          ];
+        },
+
+        edgeValue(o) { return o.kind === "arb" ? o.margin : o.edge_pct; },
+        fmtOdds(v) { return v == null ? "—" : Number(v).toFixed(2); },
+        fmtPct(v) { return v == null ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(2) + "%"; },
+        fmtDuration(sec) {
+          if (!sec || sec < 1) return "just now";
+          if (sec < 60) return sec + "s";
+          if (sec < 3600) return Math.floor(sec / 60) + "m";
+          return Math.floor(sec / 3600) + "h " + Math.floor((sec % 3600) / 60) + "m";
+        },
+        fmtTime(iso) {
+          if (!iso) return "—";
+          return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        },
+        fmtAgo(iso) {
+          const sec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+          return this.fmtDuration(sec) + " ago";
+        },
+      };
+    }
+  </script>
+</body>
+</html>

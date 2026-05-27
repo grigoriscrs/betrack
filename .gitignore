@@ -4,3 +4,7 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+*.db
+*.log
+node_modules/
+betrack/web/static/dist/
