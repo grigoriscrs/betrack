@@ -2,82 +2,76 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Status
-
-**Pre-implementation.** The repository currently contains only the MVP specification ([real_time_odds_discrepancy_monitor_mvp_spec.md](real_time_odds_discrepancy_monitor_mvp_spec.md)). No build system, package.json, or source code exists yet. Build/test/lint commands will be added here once implementation begins.
-
 ## What This Project Is
 
-**BETrack** — a real-time odds discrepancy monitor for sports betting. It compares Betfair Exchange odds against licensed feeds for Stoiximan and Novibet, detecting value discrepancies, stale lines, and arbitrage opportunities. MVP scope: football only, markets 1X2 / Over-Under 2.5 / BTTS.
+**BETrack** — a real-time odds discrepancy monitor for football betting. It ingests odds for Greek bookmakers (Stoiximan, Novibet), normalizes them to a canonical model, and detects value discrepancies and arbitrage opportunities. MVP scope: football only, markets `1X2` / `Over-Under` / `BTTS`.
 
-This is **not** an auto-betting platform or scraping framework. Data from local bookmakers must come from licensed odds-feed providers only.
+This is **not** an auto-betting platform or scraping framework. Bookmaker data comes from a licensed odds-feed API only.
 
-## Planned Architecture
+The full product spec is in [real_time_odds_discrepancy_monitor_mvp_spec.md](real_time_odds_discrepancy_monitor_mvp_spec.md). **Read the "Spec vs. implementation" section below before trusting the spec** — the code intentionally diverges from it in several places.
 
-```
-Data Sources (Betfair API/Stream + Licensed Odds Provider)
-    ↓
-Ingestion Layer (Fetch, Validate, Timestamp, Deduplicate)
-    ↓
-Normalization Layer (Canonical events, markets, outcomes)
-    ↓
-Odds Store (Latest + Historical quotes)
-    ↓
-Comparison Engine (Fair price estimation, Edge calc, Arbitrage calc)
-    ↓
-Alert Engine (Threshold checks, Persistence checks, Confidence scoring, Cooldowns)
-    ↓
-Delivery Layer (Telegram initially, then Discord + Dashboard)
+## Commands
+
+```bash
+pip install -r requirements.txt        # Python 3.10+ (uses 3.10+ union syntax)
+echo "API_KEY=..." > .env              # required; key for api.odds-api.io
+
+python main.py                         # run the continuous poller (Ctrl-C to stop)
+python diagnose.py                     # one-shot scan: print every comparable outcome + its edge
 ```
 
-The system must be **event-driven** where possible. Betfair should use Stream API (WebSocket). Provider feeds should use push updates; fall back to polling only when necessary.
+`API_KEY` is read from the environment / `.env` at startup; both entry points raise immediately if it is missing. There is **no test suite, linter, or build step** yet — do not claim one exists. (The `init tests` commit, despite its name, added the package, not tests.) When adding tests, also add the runner command here.
 
-## Canonical Data Model
+## Architecture
 
-The normalization layer is mandatory — all sources must map to these canonical structures before comparison:
+The pipeline is a synchronous fan-through driven by an async poll loop in [main.py](main.py):
 
-- **CanonicalEvent:** `event_id, sport, competition, home_team, away_team, start_time, status`
-- **CanonicalMarket:** `market_id, event_id, market_type, period, line, settlement_scope`
-- **CanonicalOutcome:** `outcome_id, market_id, outcome_type, team_reference, line`
-- **OddsQuote:** `bookmaker, event_id, market_id, outcome_id, decimal_odds, timestamp_received, source_timestamp, status, liquidity, raw_payload_reference`
+```
+OddsApiClient (ingestion)  →  map_event / map_odds (normalization)
+    →  OddsStore (in-memory)  →  find_value / find_arbitrage (comparison)
+    →  AlertEngine (persistence + cooldown gating)  →  console delivery
+```
 
-Critical normalization rules:
-- Team names like `"Olympiacos"`, `"Olympiakos Piraeus"`, `"Ολυμπιακός"` must map to one canonical team.
-- Market names like `"Match Odds"`, `"Τελικό Αποτέλεσμα"`, `"Match Result"` must all map to `football.full_time.1x2`.
-- Lines `Over 2.5`, `Over 2.25`, `Over 2.75` must **never** be treated as identical.
+One package, one module per stage — [betrack/ingestion/client.py](betrack/ingestion/client.py), [betrack/normalization/mapper.py](betrack/normalization/mapper.py), [betrack/store/odds_store.py](betrack/store/odds_store.py), [betrack/comparison/engine.py](betrack/comparison/engine.py), [betrack/alerts/engine.py](betrack/alerts/engine.py), [betrack/delivery/console.py](betrack/delivery/console.py). All canonical types live in [betrack/models/canonical.py](betrack/models/canonical.py) as pydantic models / str-enums.
 
-## Alert Logic
+Each poll cycle (`POLL_INTERVAL = 180s`, capped at `MAX_EVENTS_PER_CYCLE = 5` to stay under the free-tier 100 req/hr quota): fetch live + prematch events, fetch odds per event, normalize, upsert into the store, then run value and arbitrage comparison and gate the results through the alert engine.
 
-Three alert types:
+### Canonical data model (the contract every source maps to)
 
-1. **Value Discrepancy** — bookmaker odds significantly exceed Betfair fair price. Fair price = `(back + lay) / 2` as starting approximation.
-2. **Stale-Line** — Betfair moves aggressively but local bookmaker hasn't updated.
-3. **Arbitrage** — best odds across bookmakers satisfy `1/home + 1/draw + 1/away < 1`.
+- **CanonicalEvent** — `event_id, sport, competition, home_team, away_team, start_time, status`
+- **CanonicalMarket** — `market_id, event_id, market_type, period, line, settlement_scope`
+- **CanonicalOutcome** — `outcome_id, market_id, outcome_type, team_reference, line`
+- **OddsQuote** — `bookmaker, event_id, market_id, ..., decimal_odds, timestamp_received, source_timestamp, status, liquidity`
 
-Alerts must **not** fire from single unstable ticks, suspended markets, stale/expired data, low-liquidity markets, or wide Betfair spreads.
+IDs are deterministic md5 hashes of their natural keys (see `_make_id` in the mapper), so re-ingesting the same event/market/outcome upserts in place rather than duplicating.
 
-### Thresholds
+Normalization rules the mapper enforces and that must be preserved:
+- Team-name variants (`"Olympiacos"`, `"Olympiakos Piraeus"`, `"Ολυμπιακός"`) collapse to one canonical name via `TEAM_ALIASES`.
+- Market-name variants (`"Match Odds"`, `"1x2"`, `"ml"`, `"Match Result"`) map to `MarketType` via `MARKET_NAME_MAP`. An unmapped market name is **skipped silently** — extend the map to support a new market.
+- Over/Under lines are part of the market and outcome ID, so `Over 2.5` and `Over 2.75` are **never** merged.
 
-| Context | Min Edge | Min Persistence | Max Betfair data age | Max provider data age |
-|---|---|---|---|---|
-| Live | 5% | 2 consecutive checks | 2–3 seconds | 5–8 seconds |
-| Prematch | 2–3% | 2–5 minutes | — | — |
+### Alert logic
 
-### Priority-based update intervals
+Two detectors run today (see "Spec vs. implementation" for the missing third):
 
-| Priority | Context | Interval |
+1. **Value** (`find_value`) — an outcome priced higher than the reference bookmaker by ≥ `min_edge`. Edge = `bookmaker_odds / reference_odds - 1`.
+2. **Arbitrage** (`find_arbitrage`) — `1X2` only: best odds per outcome across bookmakers satisfy `Σ(1/odds) < 1`.
+
+`AlertEngine` gates raw opportunities so alerts don't fire from single unstable ticks:
+
+| Context | Min edge | Min persistence (consecutive cycles) |
 |---|---|---|
-| 1 | Live, high liquidity, recent movement | 1–5 s |
-| 2 | Stable live | 5–15 s |
-| 3 | Starting soon | 15–30 s |
-| 4 | General prematch | 1–5 min |
+| Live | 5% (`MIN_EDGE_LIVE`) | 2 (`MIN_PERSISTENCE_LIVE`) |
+| Prematch | 2.5% (`MIN_EDGE_PREMATCH`) | 3 (`MIN_PERSISTENCE_PREMATCH`) |
 
-## Development Phases
+A 300s cooldown (`COOLDOWN_SECONDS`) suppresses repeat alerts per `(event, market, outcome, bookmaker)`. A cycle where the edge drops below threshold resets the persistence counter.
 
-- **Phase 1 (done):** Product specification
-- **Phase 2:** Validate Betfair API access + provider availability (Stoiximan/Novibet coverage, live latency)
-- **Phase 3:** Implement normalization layer (event/market/outcome mapping)
-- **Phase 4:** Implement Alert Engine (value calc, stale-line detection, arbitrage, confidence scoring, cooldowns)
-- **Phase 5:** Prototype — console or Telegram alerts, one sport, few events
-- **Phase 6:** Live pilot — measure real latency, persistence, false-positive rates
-- **Phase 7:** Expansion (more bookmakers, sports, dashboard, analytics)
+## Spec vs. implementation (important divergences)
+
+The code is a Phase-2/3 prototype and deliberately departs from the spec. Match new work to the **code's** current shape unless explicitly asked to close one of these gaps:
+
+- **No Betfair.** The spec frames everything as Betfair-vs-bookmaker with `fair_price = (back + lay) / 2`. The implementation has no Betfair/Stream integration — it pulls Stoiximan and Novibet from a single odds API (`api.odds-api.io/v3`) and uses **Stoiximan as a soft reference line** (`REFERENCE_BOOKMAKER` in the comparison engine). This is a known stand-in for a sharp line until Phase 6+.
+- **Polling, not event-driven.** The spec wants WebSocket/push; the prototype polls every 180s because of the free-tier quota. The priority-based update intervals in the spec are not implemented.
+- **Stale-line detection is not implemented.** Only value and arbitrage exist. `source_timestamp` is captured on quotes but not yet used for staleness checks.
+- **Store is in-memory and latest-quote-only.** `OddsStore` keeps one quote per `(bookmaker, outcome_id)`; there is no historical-quote retention despite the spec's "Latest + Historical" store. Nothing persists across process restarts.
+- **Delivery is console-only.** No Telegram/Discord yet. `delivery/console.py` reaches into `OddsStore._outcomes` / `._markets` directly for labels.
