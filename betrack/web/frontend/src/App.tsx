@@ -1,80 +1,49 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, edgeValue, type Opportunity, type Status } from "./api";
+import { api, type EventRow, type Sport, type Status } from "./api";
 import { StatusBar } from "./components/StatusBar";
-import { DEFAULT_FILTERS, FilterBar, type Filters } from "./components/FilterBar";
-import { OpportunitiesTable, type Sort, type SortKey } from "./components/OpportunitiesTable";
+import { EventsTable } from "./components/EventsTable";
 import { EventDrawer } from "./components/EventDrawer";
+import { OpportunitiesView } from "./components/OpportunitiesView";
 
-type Tab = "live" | "history";
-
-function applyFilters(rows: Opportunity[], f: Filters, mode: Tab): Opportunity[] {
-  const needle = f.search.trim().toLowerCase();
-  return rows.filter((o) => {
-    if (needle && !`${o.event_label} ${o.competition}`.toLowerCase().includes(needle)) return false;
-    if (f.kind !== "all" && o.kind !== f.kind) return false;
-    if (f.market !== "all" && o.market_label !== f.market) return false;
-    if (f.bookmaker !== "all") {
-      const inValue = o.bookmaker === f.bookmaker;
-      const inArb = o.legs ? Object.values(o.legs).some((l) => l.bookmaker === f.bookmaker) : false;
-      if (!inValue && !inArb) return false;
-    }
-    if (mode === "history" && f.status !== "all") {
-      if (f.status === "active" && !o.active) return false;
-      if (f.status === "expired" && o.active) return false;
-    }
-    const edge = edgeValue(o);
-    if (f.minEdge > 0 && (edge == null || edge * 100 < f.minEdge)) return false;
-    return true;
-  });
-}
-
-function sortRows(rows: Opportunity[], sort: Sort): Opportunity[] {
-  const dir = sort.dir === "asc" ? 1 : -1;
-  const val = (o: Opportunity): number | string => {
-    switch (sort.key) {
-      case "event":
-        return o.event_label.toLowerCase();
-      case "market":
-        return o.market_label.toLowerCase();
-      case "edge":
-        return edgeValue(o) ?? -Infinity;
-      case "duration":
-        return o.duration_seconds;
-      case "lastSeen":
-        return new Date(o.last_seen).getTime();
-      case "status":
-        return o.active ? 1 : 0;
-    }
-  };
-  return [...rows].sort((a, b) => {
-    const av = val(a);
-    const bv = val(b);
-    if (av < bv) return -1 * dir;
-    if (av > bv) return 1 * dir;
-    return 0;
-  });
-}
+type Page = "opportunities" | "events";
 
 export default function App() {
   const [status, setStatus] = useState<Status | null>(null);
-  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
-  const [history, setHistory] = useState<Opportunity[]>([]);
-  const [tab, setTab] = useState<Tab>("live");
-  const [filters, setFilters] = useState<Filters>({ ...DEFAULT_FILTERS });
-  const [sort, setSort] = useState<Sort>({ key: "edge", dir: "desc" });
+  const [sports, setSports] = useState<Sport[]>([]);
+  const [page, setPage] = useState<Page>("opportunities");
+  const [sport, setSport] = useState<string>("football");
+  const [events, setEvents] = useState<EventRow[]>([]);
+  const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
+
+  const allBookmakers = status?.bookmakers ?? ["Stoiximan", "Novibet", "Pamestoixima", "Betfair"];
+  // Multi-select bookmaker filter. Initialise to all once status arrives.
+  const [selectedBooks, setSelectedBooks] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (selectedBooks === null && status?.bookmakers) {
+      setSelectedBooks(status.bookmakers);
+    }
+  }, [status, selectedBooks]);
+  const effectiveSelected = selectedBooks ?? allBookmakers;
 
   useEffect(() => {
     let stop = false;
     const tick = async () => {
       try {
-        const [st, opps, hist] = await Promise.all([api.status(), api.opportunities(), api.history()]);
-        if (stop) return;
-        setStatus(st);
-        setOpportunities(opps);
-        setHistory(hist);
+        if (page === "events") {
+          const [st, sp, ev] = await Promise.all([api.status(), api.sports(), api.events(sport)]);
+          if (stop) return;
+          setStatus(st);
+          setSports(sp);
+          setEvents(ev);
+        } else {
+          const [st, sp] = await Promise.all([api.status(), api.sports()]);
+          if (stop) return;
+          setStatus(st);
+          setSports(sp);
+        }
       } catch {
-        /* transient; keep last good state */
+        /* transient */
       }
     };
     tick();
@@ -83,61 +52,132 @@ export default function App() {
       stop = true;
       clearInterval(id);
     };
-  }, []);
+  }, [page, sport]);
 
-  const source = tab === "live" ? opportunities : history;
+  const visible = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return events.filter((e) => {
+      if (needle && !`${e.home_team} ${e.away_team} ${e.competition}`.toLowerCase().includes(needle))
+        return false;
+      // Multi-select: keep the event if it has at least one of the selected books.
+      if (!effectiveSelected.some((b) => e.books.includes(b))) return false;
+      return true;
+    });
+  }, [events, search, effectiveSelected]);
 
-  const markets = useMemo(
-    () => Array.from(new Set(source.map((o) => o.market_label))).sort(),
-    [source]
-  );
-  const bookmakers = status?.bookmakers ?? [];
+  const selectCls =
+    "bg-slate-900 border border-slate-800 rounded-md px-2 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-emerald-500";
 
-  const visible = useMemo(
-    () => sortRows(applyFilters(source, filters, tab), sort),
-    [source, filters, tab, sort]
-  );
-
-  const onSort = (key: SortKey) =>
-    setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" }));
-
-  const tabBtn = (id: Tab, label: string, count?: number) => (
+  const pageBtn = (key: Page, label: string) => (
     <button
-      onClick={() => setTab(id)}
+      key={key}
+      onClick={() => setPage(key)}
       className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-        tab === id
+        page === key
           ? "border-emerald-400 text-white"
           : "border-transparent text-slate-400 hover:text-slate-200"
       }`}
     >
       {label}
-      {count != null && <span className="ml-1 text-xs text-slate-500">({count})</span>}
     </button>
   );
 
+  const sportBtn = (s: Sport) => (
+    <button
+      key={s.key}
+      onClick={() => setSport(s.key)}
+      className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wider rounded-md border transition-colors ${
+        sport === s.key
+          ? "border-emerald-400 text-white bg-emerald-400/10"
+          : "border-slate-800 text-slate-500 hover:text-slate-300"
+      }`}
+    >
+      {s.label}
+      <span className="ml-1 opacity-60">({s.live_count})</span>
+    </button>
+  );
+
+  const toggleBook = (b: string) => {
+    if (selectedBooks === null) {
+      setSelectedBooks(allBookmakers.filter((x) => x !== b));
+      return;
+    }
+    if (selectedBooks.includes(b)) {
+      setSelectedBooks(selectedBooks.filter((x) => x !== b));
+    } else {
+      setSelectedBooks([...selectedBooks, b]);
+    }
+  };
+
+  const bookChip = (b: string) => {
+    const on = effectiveSelected.includes(b);
+    return (
+      <button
+        key={b}
+        onClick={() => toggleBook(b)}
+        className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-colors ${
+          on
+            ? "border-emerald-400 text-emerald-300 bg-emerald-400/10"
+            : "border-slate-800 text-slate-500 hover:text-slate-300"
+        }`}
+      >
+        {b}
+      </button>
+    );
+  };
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
-      <StatusBar status={status} />
+      <StatusBar status={status} sports={sports} />
 
       <div className="flex gap-1 mb-4 border-b border-slate-800">
-        {tabBtn("live", "Live Opportunities", opportunities.length)}
-        {tabBtn("history", "History")}
+        {pageBtn("opportunities", "Opportunities")}
+        {pageBtn("events", "Events")}
       </div>
 
-      <FilterBar
-        filters={filters}
-        onChange={setFilters}
-        markets={markets}
-        bookmakers={bookmakers}
-        showStatus={tab === "history"}
-      />
+      {page === "opportunities" && <OpportunitiesView onSelect={setSelected} />}
 
-      <OpportunitiesTable rows={visible} mode={tab} sort={sort} onSort={onSort} onSelect={setSelected} />
-
-      <p className="text-xs text-slate-600 mt-8">
-        Reference line: {status?.reference ?? "Stoiximan"} (soft stand-in for a sharp line). Data via
-        odds-api.io free tier. Click any row to inspect the full event.
-      </p>
+      {page === "events" && (
+        <>
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            {(sports.length ? sports : [{ key: "football", label: "Football", live_count: 0 }]).map(sportBtn)}
+            <span className="ml-2 text-xs text-slate-600">·</span>
+            <span className="text-xs text-slate-500 mr-1">Books:</span>
+            {allBookmakers.map(bookChip)}
+            <button
+              onClick={() => setSelectedBooks(allBookmakers)}
+              className="px-2 py-1 text-[11px] text-slate-500 hover:text-slate-300"
+              title="select all"
+            >
+              all
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            <input
+              type="text"
+              placeholder="Search team / competition…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className={`${selectCls} w-72`}
+            />
+            <span className="text-xs text-slate-600 ml-auto">
+              {visible.length} event{visible.length === 1 ? "" : "s"} · showing {effectiveSelected.length} of{" "}
+              {allBookmakers.length} books
+            </span>
+          </div>
+          <EventsTable
+            rows={visible}
+            sport={sport}
+            selectedBookmakers={effectiveSelected}
+            onSelect={setSelected}
+          />
+          <p className="text-xs text-slate-600 mt-6">
+            Live odds polled directly from {allBookmakers.join(" + ")} every {status?.poll_interval ?? 30}s.
+            Stoiximan/Novibet are matched by Sportradar id; Betfair cross-matches by team names. Click a row
+            for the full per-market drawer.
+          </p>
+        </>
+      )}
 
       <EventDrawer eventId={selected} onClose={() => setSelected(null)} />
     </div>

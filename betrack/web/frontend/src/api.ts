@@ -1,67 +1,173 @@
+export interface Sport {
+  key: string;
+  label: string;
+  live_count: number;
+}
+
+export interface BookCounts {
+  events: number;
+  markets: number;
+  quotes_observed: number;
+  quotes_changed: number;
+}
+
 export interface Status {
   last_run: string | null;
-  live: number;
-  prematch: number;
-  scanned: number;
-  covered: number;
-  quota_remaining: string | null;
-  bookmakers: string[];
-  reference: string;
   poll_interval: number;
+  bookmakers: string[];
+  counts: Record<string, BookCounts>;
+  total_observed: number;
+  total_changed: number;
+  errors: string[];
+  detection: string;
+  book_last_observed?: Record<string, string>;
 }
 
-export interface ArbLeg {
-  bookmaker: string;
+export interface Quote {
   odds: number;
+  age_seconds: number | null;
+  outcome_id: string;
 }
 
-export interface Opportunity {
-  id: number;
-  signature: string;
-  kind: "value" | "arb";
-  event_id: string;
-  event_label: string;
-  competition: string;
-  status: string;
-  market_label: string;
-  outcome_label: string | null;
-  bookmaker: string | null;
-  bookmaker_odds: number | null;
-  reference_odds: number | null;
-  edge_pct: number | null;
-  margin: number | null;
-  legs?: Record<string, ArbLeg> | null;
-  first_seen: string;
-  last_seen: string;
-  active: boolean;
-  alerted: boolean;
-  duration_seconds: number;
-}
-
-export interface EventOutcome {
-  outcome_label: string;
+export interface Outcome {
   outcome_type: string;
-  quotes: Record<string, number>;
-  edge_pct: number | null;
+  label: string;
+  line: number | null;
+  quotes: Record<string, Quote>;
+  best: string | null;
+  gap_pct: number | null;
 }
 
-export interface EventMarket {
-  market_label: string;
+export interface Market {
   market_type: string;
+  market_label: string;
+  period: string;
   line: number | null;
-  outcomes: EventOutcome[];
+  outcomes: Outcome[];
+}
+
+export interface EventRow {
+  event_id: string;
+  home_team: string;
+  away_team: string;
+  competition: string;
+  country: string | null;
+  status: string;
+  start_time: string;
+  sportradar_match_id: number | null;
+  books: string[];
+  headline: Market | null;
 }
 
 export interface EventDetail {
   found: boolean;
   event_id?: string;
-  event_label?: string;
+  home_team?: string;
+  away_team?: string;
   competition?: string;
   status?: string;
   start_time?: string;
-  bookmakers?: string[];
-  reference?: string;
-  markets?: EventMarket[];
+  sport?: string;
+  sportradar_match_id?: number | null;
+  books?: string[];
+  markets?: Market[];
+}
+
+export interface QuotePoint {
+  decimal_odds: number;
+  observed_at: string;
+  source_timestamp: string | null;
+}
+
+export interface ValueOpportunity {
+  type: "value";
+  event_id: string;
+  home_team: string;
+  away_team: string;
+  sport: string;
+  competition: string;
+  country: string | null;
+  market_type: string;
+  market_label: string;
+  period: string;
+  line: number | null;
+  outcome_type: string;
+  outcome_label: string;
+  bookmaker: string;
+  bookmaker_odds: number;
+  implied_prob_at_book: number;
+  fair_prob: number;
+  edge_pct: number;
+  betfair_back: number | null;
+  betfair_lay: number | null;
+  liquidity_total_matched: number | null;
+  age_seconds: number | null;
+  outcome_id: string;
+}
+
+export interface ArbLeg {
+  outcome_type: string;
+  outcome_label: string;
+  line: number | null;
+  bookmaker: string;
+  odds: number;
+  outcome_id: string;
+  age_seconds: number | null;
+}
+
+export interface ArbOpportunity {
+  type: "arb";
+  event_id: string;
+  home_team: string;
+  away_team: string;
+  sport: string;
+  competition: string;
+  country: string | null;
+  market_type: string;
+  market_label: string;
+  period: string;
+  line: number | null;
+  roi_pct: number;
+  legs: ArbLeg[];
+}
+
+export interface LocalDiffBook {
+  odds: number;
+  age_seconds: number | null;
+  outcome_id: string;
+}
+
+export interface LocalDiff {
+  type: "diff";
+  event_id: string;
+  home_team: string;
+  away_team: string;
+  sport: string;
+  competition: string;
+  country: string | null;
+  market_type: string;
+  market_label: string;
+  period: string;
+  line: number | null;
+  outcome_type: string;
+  outcome_label: string;
+  // Per-local-book quotes that participated in this disagreement. Keyed by
+  // bookmaker name; only books that actually quoted this outcome are
+  // present, so a row may have 2 or 3 entries depending on coverage.
+  books: Record<string, LocalDiffBook>;
+  high_book: string;
+  high_odds: number;
+  low_book: string;
+  low_odds: number;
+  gap_pct: number;
+  betfair_back: number | null;
+  betfair_lay: number | null;
+}
+
+export interface Opportunities {
+  value: ValueOpportunity[];
+  arb: ArbOpportunity[];
+  diffs: LocalDiff[];
 }
 
 async function getJSON<T>(url: string): Promise<T> {
@@ -72,11 +178,45 @@ async function getJSON<T>(url: string): Promise<T> {
 
 export const api = {
   status: () => getJSON<Status>("/api/status"),
-  opportunities: () => getJSON<Opportunity[]>("/api/opportunities"),
-  history: (limit = 200) => getJSON<Opportunity[]>(`/api/history?limit=${limit}`),
-  event: (id: string) => getJSON<EventDetail>(`/api/events/${id}`),
+  sports: () => getJSON<Sport[]>("/api/sports"),
+  events: (sport: string) => getJSON<EventRow[]>(`/api/events?sport=${sport}`),
+  event: (id: string) => getJSON<EventDetail>(`/api/event/${id}`),
+  quoteHistory: (outcomeId: string, bookmaker: string, limit = 200) =>
+    getJSON<QuotePoint[]>(`/api/quote-history/${outcomeId}?bookmaker=${bookmaker}&limit=${limit}`),
+  opportunities: (
+    minEdge: number,
+    minGap: number,
+    minGapHighOdds: number,
+    minRoi: number,
+    sport: string | null,
+    freshSeconds: number,
+  ) => {
+    const params = new URLSearchParams({
+      min_edge: minEdge.toString(),
+      min_gap: minGap.toString(),
+      min_gap_high_odds: minGapHighOdds.toString(),
+      min_roi: minRoi.toString(),
+      fresh_seconds: freshSeconds.toString(),
+    });
+    if (sport) params.set("sport", sport);
+    return getJSON<Opportunities>(`/api/opportunities?${params}`);
+  },
 };
 
-export function edgeValue(o: Opportunity): number | null {
-  return o.kind === "arb" ? o.margin : o.edge_pct;
+// Short symbol for an outcome on the headline row (1 / X / 2, O / U, etc.).
+export function outcomeSymbol(outcomeType: string): string {
+  switch (outcomeType) {
+    case "home_win":
+      return "1";
+    case "draw":
+      return "X";
+    case "away_win":
+      return "2";
+    case "over":
+      return "O";
+    case "under":
+      return "U";
+    default:
+      return outcomeType;
+  }
 }

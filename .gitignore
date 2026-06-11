@@ -8,3 +8,5 @@ venv/
 *.log
 node_modules/
 betrack/web/static/dist/
+
+*.har

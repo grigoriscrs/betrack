@@ -1,0 +1,378 @@
+{
+  "data": {
+    "drilldownNodes": [
+      {
+        "id": "2",
+        "refRecordId": "2",
+        "refRecordType": "drilldownTag",
+        "name": "Sports",
+        "levelNumber": 1,
+        "parentDrilldownNodeId": null,
+        "displayOrder": 0,
+        "eventCounts": [
+          {
+            "LIVE": 90
+          },
+          {
+            "ONE_HOUR": 549
+          },
+          {
+            "THREE_HOURS": 1574
+          },
+          {
+            "SIX_HOURS": 2790
+          },
+          {
+            "TWELVE_HOURS": 3570
+          },
+          {
+            "ONE_DAY": 3642
+          },
+          {
+            "TWO_DAYS": 3697
+          },
+          {
+            "ONE_WEEK": 3892
+          },
+          {
+            "FUTURE": 4293
+          }
+        ],
+        "drilldownNodes": [
+          {
+            "id": "11",
+            "refRecordId": "11",
+            "refRecordType": "drilldownTag",
+            "name": "Ποδόσφαιρο",
+            "levelNumber": 2,
+            "parentDrilldownNodeId": "2",
+            "displayOrder": -4100,
+            "eventCounts": [
+              {
+                "LIVE": 49
+              },
+              {
+                "ONE_HOUR": 11
+              },
+              {
+                "THREE_HOURS": 29
+              },
+              {
+                "SIX_HOURS": 59
+              },
+              {
+                "TWELVE_HOURS": 69
+              },
+              {
+                "ONE_DAY": 70
+              },
+              {
+                "TWO_DAYS": 87
+              },
+              {
+                "ONE_WEEK": 192
+              },
+              {
+                "FUTURE": 420
+              }
+            ]
+          },
+          {
+            "id": "5",
+            "refRecordId": "5",
+            "refRecordType": "drilldownTag",
+            "name": "Μπάσκετ",
+            "levelNumber": 2,
+            "parentDrilldownNodeId": "2",
+            "displayOrder": -4000,
+            "eventCounts": [
+              {
+                "LIVE": 10
+              },
+              {
+                "ONE_HOUR": 2
+              },
+              {
+                "THREE_HOURS": 9
+              },
+              {
+                "SIX_HOURS": 10
+              },
+              {
+                "TWELVE_HOURS": 15
+              },
+              {
+                "ONE_DAY": 23
+              },
+              {
+                "TWO_DAYS": 42
+              },
+              {
+                "ONE_WEEK": 49
+              },
+              {
+                "FUTURE": 61
+              }
+            ]
+          },
+          {
+            "id": "12",
+            "refRecordId": "12",
+            "refRecordType": "drilldownTag",
+            "name": "Τένις",
+            "levelNumber": 2,
+            "parentDrilldownNodeId": "2",
+            "displayOrder": -3810,
+            "eventCounts": [
+              {
+                "LIVE": 10
+              },
+              {
+                "ONE_HOUR": 2
+              },
+              {
+                "THREE_HOURS": 9
+              },
+              {
+                "SIX_HOURS": 9
+              },
+              {
+                "TWELVE_HOURS": 38
+              },
+              {
+                "ONE_DAY": 81
+              },
+              {
+                "TWO_DAYS": 88
+              },
+              {
+                "ONE_WEEK": 88
+              },
+              {
+                "FUTURE": 95
+              }
+            ]
+          },
+          {
+            "id": "29",
+            "refRecordId": "29",
+            "refRecordType": "drilldownTag",
+            "name": "Χάντμπολ",
+            "levelNumber": 2,
+            "parentDrilldownNodeId": "2",
+            "displayOrder": -3780,
+            "eventCounts": [
+              {
+                "LIVE": 1
+              },
+              {
+                "ONE_HOUR": 17
+              },
+              {
+                "THREE_HOURS": 20
+              },
+              {
+                "SIX_HOURS": 20
+              },
+              {
+                "TWELVE_HOURS": 20
+              },
+              {
+                "ONE_DAY": 20
+              },
+              {
+                "TWO_DAYS": 20
+              },
+              {
+                "ONE_WEEK": 36
+              },
+              {
+                "FUTURE": 37
+              }
+            ]
+          },
+          {
+            "id": "20",
+            "refRecordId": "20",
+            "refRecordType": "drilldownTag",
+            "name": "Κρίκετ",
+            "levelNumber": 2,
+            "parentDrilldownNodeId": "2",
+            "displayOrder": -3600,
+            "eventCounts": [
+              {
+                "LIVE": 13
+              },
+              {
+                "ONE_HOUR": 1
+              },
+              {
+                "THREE_HOURS": 3
+              },
+              {
+                "SIX_HOURS": 4
+              },
+              {
+                "TWELVE_HOURS": 12
+              },
+              {
+                "ONE_DAY": 31
+              },
+              {
+                "TWO_DAYS": 39
+              },
+              {
+                "ONE_WEEK": 42
+              },
+              {
+                "FUTURE": 53
+              }
+            ]
+          },
+          {
+            "id": "8",
+            "refRecordId": "8",
+            "refRecordType": "drilldownTag",
+            "name": "Χόκεϊ επί πάγου",
+            "levelNumber": 2,
+            "parentDrilldownNodeId": "2",
+            "displayOrder": -3550,
+            "eventCounts": [
+              {
+                "LIVE": 1
+              },
+              {
+                "THREE_HOURS": 1
+              },
+              {
+                "SIX_HOURS": 2
+              },
+              {
+                "TWELVE_HOURS": 3
+              },
+              {
+                "ONE_DAY": 3
+              },
+              {
+                "TWO_DAYS": 4
+              },
+              {
+                "ONE_WEEK": 6
+              },
+              {
+                "FUTURE": 9
+              }
+            ]
+          },
+          {
+            "id": "24",
+            "refRecordId": "24",
+            "refRecordType": "drilldownTag",
+            "name": "eSports",
+            "levelNumber": 2,
+            "parentDrilldownNodeId": "2",
+            "displayOrder": -3500,
+            "eventCounts": [
+              {
+                "LIVE": 4
+              },
+              {
+                "ONE_HOUR": 24
+              },
+              {
+                "THREE_HOURS": 24
+              },
+              {
+                "SIX_HOURS": 24
+              },
+              {
+                "TWELVE_HOURS": 24
+              },
+              {
+                "ONE_DAY": 24
+              },
+              {
+                "TWO_DAYS": 24
+              },
+              {
+                "ONE_WEEK": 24
+              },
+              {
+                "FUTURE": 24
+              }
+            ]
+          },
+          {
+            "id": "36",
+            "refRecordId": "36",
+            "refRecordType": "drilldownTag",
+            "name": "Ράγκμπι Γιούνιον",
+            "levelNumber": 2,
+            "parentDrilldownNodeId": "2",
+            "displayOrder": -2300,
+            "eventCounts": [
+              {
+                "LIVE": 1
+              },
+              {
+                "SIX_HOURS": 1
+              },
+              {
+                "TWELVE_HOURS": 2
+              },
+              {
+                "ONE_DAY": 2
+              },
+              {
+                "TWO_DAYS": 2
+              },
+              {
+                "ONE_WEEK": 8
+              },
+              {
+                "FUTURE": 12
+              }
+            ]
+          },
+          {
+            "id": "26",
+            "refRecordId": "26",
+            "refRecordType": "drilldownTag",
+            "name": "Ποδόσφαιρο Σάλας",
+            "levelNumber": 2,
+            "parentDrilldownNodeId": "2",
+            "displayOrder": -2000,
+            "eventCounts": [
+              {
+                "LIVE": 1
+              },
+              {
+                "THREE_HOURS": 1
+              },
+              {
+                "SIX_HOURS": 3
+              },
+              {
+                "TWELVE_HOURS": 3
+              },
+              {
+                "ONE_DAY": 3
+              },
+              {
+                "TWO_DAYS": 6
+              },
+              {
+                "ONE_WEEK": 6
+              },
+              {
+                "FUTURE": 6
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "extensions": null,
+  "errors": []
+}

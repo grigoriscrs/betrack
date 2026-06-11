@@ -15,7 +15,8 @@ from betrack.models.canonical import (
     OutcomeType,
 )
 
-# Team name variants → canonical name
+# Team name variants → canonical name. Used by every mapper to collapse
+# spelling drift across books (Betfair short forms vs. Stoix/Novi long forms).
 TEAM_ALIASES: dict[str, str] = {
     "olympiacos": "Olympiacos",
     "olympiakos": "Olympiacos",
@@ -27,22 +28,51 @@ TEAM_ALIASES: dict[str, str] = {
     "aek athens": "AEK Athens",
     "panathinaikos": "Panathinaikos",
     "panathinaikos fc": "Panathinaikos",
+    # Common Betfair shortforms (drop suffixes / abbreviations)
+    "paris st-g": "PSG",
+    "paris saint-germain": "PSG",
+    "psg": "PSG",
+    "man utd": "Manchester United",
+    "man united": "Manchester United",
+    "manchester utd": "Manchester United",
+    "man city": "Manchester City",
+    "wolves": "Wolverhampton",
+    "tottenham": "Tottenham",
+    "spurs": "Tottenham",
+    "tottenham hotspur": "Tottenham",
+    "brighton": "Brighton",
+    "brighton & hove albion": "Brighton",
+    "ath madrid": "Atletico Madrid",
+    "atletico madrid": "Atletico Madrid",
+    "ath bilbao": "Athletic Bilbao",
+    "real madrid": "Real Madrid",
+    "barcelona": "Barcelona",
+    "barca": "Barcelona",
+    "inter": "Inter Milan",
+    "inter milan": "Inter Milan",
+    "ac milan": "AC Milan",
+    "milan": "AC Milan",
+    "bayern": "Bayern Munich",
+    "bayern munich": "Bayern Munich",
+    "bayern munchen": "Bayern Munich",
+    "dortmund": "Borussia Dortmund",
+    "borussia dortmund": "Borussia Dortmund",
 }
 
 # API market name → canonical MarketType
 MARKET_NAME_MAP: dict[str, MarketType] = {
-    "ml": MarketType.FULL_TIME_1X2,
-    "match line": MarketType.FULL_TIME_1X2,
-    "1x2": MarketType.FULL_TIME_1X2,
-    "match result": MarketType.FULL_TIME_1X2,
-    "match odds": MarketType.FULL_TIME_1X2,
-    "totals": MarketType.FULL_TIME_OVER_UNDER,
-    "over/under": MarketType.FULL_TIME_OVER_UNDER,
-    "total goals": MarketType.FULL_TIME_OVER_UNDER,
-    "btts": MarketType.FULL_TIME_BTTS,
-    "both teams to score": MarketType.FULL_TIME_BTTS,
-    "gg/ng": MarketType.FULL_TIME_BTTS,
-    "goal/no goal": MarketType.FULL_TIME_BTTS,
+    "ml": MarketType.FOOTBALL_FULL_TIME_1X2,
+    "match line": MarketType.FOOTBALL_FULL_TIME_1X2,
+    "1x2": MarketType.FOOTBALL_FULL_TIME_1X2,
+    "match result": MarketType.FOOTBALL_FULL_TIME_1X2,
+    "match odds": MarketType.FOOTBALL_FULL_TIME_1X2,
+    "totals": MarketType.FOOTBALL_FULL_TIME_OVER_UNDER,
+    "over/under": MarketType.FOOTBALL_FULL_TIME_OVER_UNDER,
+    "total goals": MarketType.FOOTBALL_FULL_TIME_OVER_UNDER,
+    "btts": MarketType.FOOTBALL_FULL_TIME_BTTS,
+    "both teams to score": MarketType.FOOTBALL_FULL_TIME_BTTS,
+    "gg/ng": MarketType.FOOTBALL_FULL_TIME_BTTS,
+    "goal/no goal": MarketType.FOOTBALL_FULL_TIME_BTTS,
 }
 
 _EVENT_STATUS_MAP: dict[str, EventStatus] = {
@@ -149,7 +179,7 @@ def _extract_outcomes(
 ) -> list[tuple[CanonicalOutcome, float]]:
     results = []
 
-    if market_type == MarketType.FULL_TIME_1X2:
+    if market_type == MarketType.FOOTBALL_FULL_TIME_1X2:
         for key, outcome_type, team_ref in [
             ("home", OutcomeType.HOME_WIN, event.home_team),
             ("draw", OutcomeType.DRAW, None),
@@ -167,7 +197,7 @@ def _extract_outcomes(
                     float(price),
                 ))
 
-    elif market_type == MarketType.FULL_TIME_OVER_UNDER:
+    elif market_type == MarketType.FOOTBALL_FULL_TIME_OVER_UNDER:
         for key, outcome_type in [("over", OutcomeType.OVER), ("under", OutcomeType.UNDER)]:
             price = odds_entry.get(key)
             if price is not None:
@@ -181,7 +211,7 @@ def _extract_outcomes(
                     float(price),
                 ))
 
-    elif market_type == MarketType.FULL_TIME_BTTS:
+    elif market_type == MarketType.FOOTBALL_FULL_TIME_BTTS:
         for key, outcome_type in [("yes", OutcomeType.BTTS_YES), ("no", OutcomeType.BTTS_NO)]:
             price = odds_entry.get(key)
             if price is not None:

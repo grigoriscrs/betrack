@@ -1,61 +1,54 @@
 import asyncio
 import logging
-import os
+import time
 
-from dotenv import load_dotenv
-
-from betrack.alerts.engine import AlertEngine
-from betrack.delivery.console import print_arb_alert, print_value_alert
-from betrack.ingestion.client import OddsApiClient
-from betrack.models.canonical import EventStatus
+from betrack.ingestion.betfair import BetfairClient
+from betrack.ingestion.novibet import NovibetClient
+from betrack.ingestion.pamestoixima import PamestoiximaClient
+from betrack.ingestion.stoiximan import StoiximanClient
 from betrack.pipeline import run_cycle
-from betrack.store.odds_store import OddsStore
-
-load_dotenv()
+from betrack.store.odds_store_sqlite import SqliteOddsStore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-API_KEY = os.environ["API_KEY"]
-BOOKMAKERS = ["Stoiximan", "Novibet"]
-
-# Free tier: 100 req/hr. Each cycle costs 2 (events) + up to MAX_EVENTS_PER_CYCLE
-# odds calls. POLL_INTERVAL keeps us comfortably under quota.
-POLL_INTERVAL = 180
-MAX_EVENTS_PER_CYCLE = 5
+# Cycle cadence. Live odds move on goal/timeout-scale (seconds), so 30s
+# bookmaker-side staleness produces phantom cross-book arbs. With parallel
+# fetches a cycle runs ~3-6s, so 10s is the politely-tight floor; MIN_SLEEP
+# guarantees a pause between cycles even if one finishes faster.
+POLL_INTERVAL = 10
+MIN_SLEEP = 2
 
 
 async def run() -> None:
-    store = OddsStore()
-    alerts = AlertEngine()
+    store = SqliteOddsStore()
+    store.prune_quote_history()
 
-    async with OddsApiClient(API_KEY, BOOKMAKERS) as client:
-        await client.select_bookmakers()
-        logger.info("BETrack started — bookmakers: %s, poll interval: %ds", BOOKMAKERS, POLL_INTERVAL)
+    async with StoiximanClient() as stoiximan, \
+               NovibetClient() as novibet, \
+               PamestoiximaClient() as pamestoixima, \
+               BetfairClient() as betfair:
+        logger.info("BETrack started — Stoiximan + Novibet + Pamestoixima + Betfair")
+        logger.info("  sports: football/basketball/tennis  poll: %ds", POLL_INTERVAL)
 
         while True:
+            t0 = time.monotonic()
             try:
-                result = await run_cycle(client, store, MAX_EVENTS_PER_CYCLE)
+                result = await run_cycle(stoiximan, novibet, pamestoixima, betfair, store)
+                for key, c in sorted(result.counts.items()):
+                    logger.info(
+                        "  %-22s events=%d markets=%d quotes=%d changed=%d",
+                        key, c["events"], c["markets"], c["quotes_observed"], c["quotes_changed"],
+                    )
                 logger.info(
-                    "%d live / %d prematch; coverage %d/%d; value=%d arb=%d",
-                    result.live_count, result.prematch_count, result.covered, result.scanned,
-                    len(result.value_opps), len(result.arb_opps),
+                    "cycle done in %.1fs: observed=%d changed=%d errors=%s",
+                    time.monotonic() - t0,
+                    result.total_observed, result.total_changed, result.errors or "none",
                 )
-
-                for opp in result.value_opps:
-                    event = store.get_event(opp.event_id)
-                    is_live = event.status == EventStatus.LIVE
-                    if alerts.evaluate_value(opp, is_live):
-                        print_value_alert(opp, event, store)
-
-                for opp in result.arb_opps:
-                    event = store.get_event(opp.event_id)
-                    if alerts.evaluate_arbitrage(opp):
-                        print_arb_alert(opp, event, store)
             except Exception as exc:
-                logger.error("Poll cycle failed: %s", exc)
+                logger.error("poll cycle failed: %s", exc)
 
-            await asyncio.sleep(POLL_INTERVAL)
+            await asyncio.sleep(max(MIN_SLEEP, POLL_INTERVAL - (time.monotonic() - t0)))
 
 
 if __name__ == "__main__":

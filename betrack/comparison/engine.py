@@ -88,7 +88,7 @@ def find_arbitrage(
     now = datetime.now(timezone.utc)
 
     for market in store.get_markets_for_event(event_id):
-        if market.market_type != MarketType.FULL_TIME_1X2:
+        if market.market_type != MarketType.FOOTBALL_FULL_TIME_1X2:
             continue
 
         outcomes = store.get_outcomes_for_market(market.market_id)

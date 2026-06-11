@@ -1,20 +1,29 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Awaitable, Callable, Optional
 
-from betrack.alerts.engine import MIN_EDGE_LIVE, MIN_EDGE_PREMATCH
-from betrack.comparison.engine import (
-    ArbitrageOpportunity,
-    ValueOpportunity,
-    find_arbitrage,
-    find_value,
+from betrack.ingestion.betfair import (
+    BetfairClient,
+    EVENT_TYPE_BASKETBALL,
+    EVENT_TYPE_FOOTBALL,
+    EVENT_TYPE_TENNIS,
 )
-from betrack.ingestion.client import OddsApiClient
-from betrack.models.canonical import EventStatus
-from betrack.normalization.mapper import map_event, map_odds
-from betrack.store.odds_store import OddsStore
+from betrack.ingestion.novibet import NovibetClient
+from betrack.ingestion.pamestoixima import PamestoiximaClient
+from betrack.ingestion.stoiximan import StoiximanClient
+from betrack.normalization import (
+    betfair_mapper,
+    novibet_mapper,
+    pamestoixima_mapper,
+    stoiximan_mapper,
+)
+from betrack.normalization.bundle import MappedEvent
+from betrack.normalization.mapper import normalize_team
+from betrack.store.odds_store_sqlite import SqliteOddsStore
 
 logger = logging.getLogger(__name__)
 
@@ -22,58 +31,230 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CycleResult:
     ran_at: datetime
-    live_count: int = 0
-    prematch_count: int = 0
-    scanned: int = 0
-    covered: int = 0
-    quota_remaining: str | None = None
-    value_opps: list[ValueOpportunity] = field(default_factory=list)
-    arb_opps: list[ArbitrageOpportunity] = field(default_factory=list)
+    counts: dict[str, dict[str, int]] = field(default_factory=dict)  # "Bookmaker/sport" -> metrics
+    total_observed: int = 0
+    total_changed: int = 0
+    errors: list[str] = field(default_factory=list)
+
+
+async def _capped(factories: list[Callable[[], Awaitable]], cap: int) -> list:
+    sem = asyncio.Semaphore(cap)
+
+    async def run(factory: Callable[[], Awaitable]):
+        async with sem:
+            try:
+                return await factory()
+            except Exception as exc:
+                logger.warning("per-event detail fetch failed: %s", exc)
+                return None
+
+    return await asyncio.gather(*(run(f) for f in factories))
+
+
+def _extract_market_ids(byevent: dict) -> list[str]:
+    out: list[str] = []
+    for et in byevent.get("eventTypes", []) or []:
+        for en in et.get("eventNodes", []) or []:
+            for mn in en.get("marketNodes", []) or []:
+                mid = mn.get("marketId")
+                if mid:
+                    out.append(str(mid))
+    return out
+
+
+def _chunked(seq: list, size: int) -> list[list]:
+    return [seq[i:i + size] for i in range(0, len(seq), size)]
+
+
+_BETFAIR_SPORTS: tuple[tuple[str, int], ...] = (
+    ("football", EVENT_TYPE_FOOTBALL),
+    ("basketball", EVENT_TYPE_BASKETBALL),
+    ("tennis", EVENT_TYPE_TENNIS),
+)
+
+
+def _build_xmatch_index(store: SqliteOddsStore, *, fresh_seconds: int = 180
+                        ) -> dict[tuple[str, str, str], str]:
+    """Index live Stoix/Novi events so Betfair can cross-match by team names.
+    Keys are (sport, home_lower, away_lower). Both sides go through
+    normalize_team — Stoix/Novi may pass through 'Arsenal FC' from a per-event
+    detail call while Betfair has 'Arsenal' from the overview eventName; only
+    the alias map collapses them. We do NOT key on start_time — Stoix/Novi
+    stamp received_at for live events, not actual kickoff."""
+    index: dict[tuple[str, str, str], str] = {}
+    for sport in ("football", "basketball", "tennis"):
+        for ev in store.get_events_by_sport(sport, status="live",
+                                            fresh_within_seconds=fresh_seconds):
+            home = normalize_team(ev.get("home_team") or "").lower()
+            away = normalize_team(ev.get("away_team") or "").lower()
+            if not home or not away:
+                continue
+            index[(sport, home, away)] = ev["event_id"]
+    return index
 
 
 async def run_cycle(
-    client: OddsApiClient,
-    store: OddsStore,
-    max_events: int,
-    prematch_limit: int = 30,
+    stoiximan: StoiximanClient,
+    novibet: NovibetClient,
+    pamestoixima: PamestoiximaClient,
+    betfair: Optional[BetfairClient],
+    store: SqliteOddsStore,
+    *,
+    detail_concurrency: int = 8,
+    detail_limit: int = 60,
+    betfair_list_max: int = 300,
 ) -> CycleResult:
-    """Fetch one round of events + odds, normalize into the store, and detect
-    value/arbitrage opportunities. Prematch events are preferred over live ones
-    because Greek-bookmaker live coverage is sparse at off-peak hours."""
-    now = datetime.now(timezone.utc)
-    result = CycleResult(ran_at=now)
+    """One poll round: fetch every bookmaker concurrently, then write to SQLite
+    off the event loop so request handlers stay responsive. Concurrent fetches
+    minimise the time-skew between books — sequential fetches let a goal scored
+    mid-cycle produce phantom cross-book arbs because one book was queried
+    pre-goal and another post-goal. Each book stamps its OWN now() inside its
+    task so quote_latest.observed_at still drifts realistically per book."""
+    cycle_start = datetime.now(timezone.utc)
+    result = CycleResult(ran_at=cycle_start)
+    seen: dict = {}
 
-    live = await client.get_live_events()
-    prematch = await client.get_prematch_events(limit=prematch_limit)
-    result.live_count = len(live)
-    result.prematch_count = len(prematch)
+    # Cross-match index uses store state from the PREVIOUS cycle so Betfair can
+    # cross-match without waiting for Stoix/Novi to finish + write. Brand-new
+    # events that first appear this cycle get cross-matched next cycle (one
+    # cycle of latency, fine).
+    async def _build_xmatch_async() -> dict:
+        return await asyncio.to_thread(_build_xmatch_index, store)
 
-    candidates = (prematch + live)[:max_events]
-    result.scanned = len(candidates)
+    async def _stoix_bundles() -> list[MappedEvent]:
+        s_now = datetime.now(timezone.utc)
+        overview = await stoiximan.fetch_overview()
+        bundles = stoiximan_mapper.map_overview(overview, s_now)
+        live = stoiximan_mapper.live_event_ids(overview)[:detail_limit]
+        factories = [
+            (lambda eid=eid: stoiximan.fetch_event(eid)) for _sport, eid in live
+        ]
+        for detail in await _capped(factories, detail_concurrency):
+            if not detail:
+                continue
+            bundle = stoiximan_mapper.map_event_detail(detail, s_now)
+            if bundle:
+                bundles.append(bundle)
+        return bundles
 
-    for raw_event in candidates:
-        try:
-            raw_odds = await client.get_odds(raw_event["id"])
-        except Exception as exc:
-            logger.warning("odds fetch failed for event %s: %s", raw_event.get("id"), exc)
+    async def _novi_bundles() -> list[MappedEvent]:
+        n_now = datetime.now(timezone.utc)
+        overview = await novibet.fetch_overview()
+        bundles = novibet_mapper.map_overview(overview, n_now)
+        live = novibet_mapper.live_event_ids(overview)[:detail_limit]
+
+        async def _novi_detail(sport: str, eid: int) -> Optional[MappedEvent]:
+            detail = await novibet.fetch_event(eid)
+            return novibet_mapper.map_event_detail(detail, sport, n_now)
+
+        factories = [
+            (lambda sport=sport, eid=eid: _novi_detail(sport, eid)) for sport, eid in live
+        ]
+        for bundle in await _capped(factories, detail_concurrency):
+            if bundle:
+                bundles.append(bundle)
+        return bundles
+
+    async def _pame_bundles() -> list[MappedEvent]:
+        p_now = datetime.now(timezone.utc)
+        overview = await pamestoixima.fetch_overview()
+        bundles = pamestoixima_mapper.map_overview(overview, p_now)
+        live = pamestoixima_mapper.live_event_ids(overview)[:detail_limit]
+        factories = [
+            (lambda eid=eid: pamestoixima.fetch_event(eid)) for _sport, eid in live
+        ]
+        for detail in await _capped(factories, detail_concurrency):
+            if not detail:
+                continue
+            bundle = pamestoixima_mapper.map_event_detail(detail, p_now)
+            if bundle:
+                bundles.append(bundle)
+        return bundles
+
+    async def _betfair_bundles_and_errors() -> tuple[list[MappedEvent], list[str]]:
+        """Returns (bundles, per-sport errors). Empty list if betfair is None."""
+        if betfair is None:
+            return [], []
+        xmatch = await _build_xmatch_async()
+        b_now = datetime.now(timezone.utc)
+
+        async def _one_sport(sport_slug: str, event_type_id: int) -> list[MappedEvent]:
+            scan = await betfair.list_in_play(event_type_id, max_results=betfair_list_max)
+            ev_ids = [eid for (_s, eid) in betfair_mapper.live_event_ids(scan, b_now)
+                      if _s == sport_slug][:detail_limit]
+            if not ev_ids:
+                return []
+            byevent_payloads: list[dict] = []
+            for ev_chunk in _chunked(ev_ids, 3):
+                try:
+                    byevent_payloads.append(await betfair.fetch_event_markets(ev_chunk))
+                except Exception as exc:
+                    logger.warning("betfair/%s byevent chunk failed: %s", sport_slug, exc)
+            market_ids: list[str] = []
+            for p in byevent_payloads:
+                market_ids.extend(_extract_market_ids(p))
+            if not market_ids:
+                return []
+            factories = [
+                (lambda mids=chunk: betfair.fetch_markets(mids, rollup_limit=10))
+                for chunk in _chunked(market_ids, 25)
+            ]
+            bundles_for_sport: list[MappedEvent] = []
+            for payload in await _capped(factories, detail_concurrency):
+                if not payload:
+                    continue
+                bundles_for_sport.extend(
+                    betfair_mapper.map_event_detail(payload, b_now, xmatch)
+                )
+            return bundles_for_sport
+
+        sport_tasks = [_one_sport(slug, etid) for slug, etid in _BETFAIR_SPORTS]
+        per_sport = await asyncio.gather(*sport_tasks, return_exceptions=True)
+        all_bundles: list[MappedEvent] = []
+        errors: list[str] = []
+        for (slug, _etid), outcome in zip(_BETFAIR_SPORTS, per_sport):
+            if isinstance(outcome, Exception):
+                msg = f"betfair/{slug}: {outcome.__class__.__name__}: {outcome}"
+                logger.warning(msg)
+                errors.append(msg)
+                continue
+            all_bundles.extend(outcome)
+        return all_bundles, errors
+
+    # --- Run all 4 books concurrently ---
+    stoix_res, novi_res, pame_res, betfair_res = await asyncio.gather(
+        _stoix_bundles(),
+        _novi_bundles(),
+        _pame_bundles(),
+        _betfair_bundles_and_errors(),
+        return_exceptions=True,
+    )
+
+    # --- Write in order: Stoix, Novi, Pame, Betfair. SQLite serializes
+    # writers anyway under WAL; explicit ordering keeps counts deterministic. ---
+    for label, res in (("stoiximan", stoix_res),
+                       ("novibet", novi_res),
+                       ("pamestoixima", pame_res)):
+        if isinstance(res, Exception):
+            logger.warning("%s cycle failed: %s", label, res)
+            result.errors.append(f"{label}: {res}")
             continue
-        if not raw_odds.get("bookmakers"):
-            continue
-        result.covered += 1
+        if res:
+            obs, chg = await asyncio.to_thread(store.write_bundles, res, result.counts, seen)
+            result.total_observed += obs
+            result.total_changed += chg
 
-        event = map_event(raw_event)
-        store.upsert_event(event)
-        markets, outcomes, quotes = map_odds(raw_odds, event, now)
-        for m in markets:
-            store.upsert_market(m)
-        for o in outcomes:
-            store.upsert_outcome(o)
-        for q in quotes:
-            store.upsert_quote(q)
+    if isinstance(betfair_res, Exception):
+        logger.warning("betfair cycle failed: %s", betfair_res)
+        result.errors.append(f"betfair: {betfair_res.__class__.__name__}: {betfair_res}")
+    else:
+        bf_bundles, bf_errors = betfair_res
+        result.errors.extend(bf_errors)
+        if bf_bundles:
+            obs, chg = await asyncio.to_thread(
+                store.write_bundles, bf_bundles, result.counts, seen,
+            )
+            result.total_observed += obs
+            result.total_changed += chg
 
-        min_edge = MIN_EDGE_LIVE if event.status == EventStatus.LIVE else MIN_EDGE_PREMATCH
-        result.value_opps.extend(find_value(store, event.event_id, min_edge=min_edge))
-        result.arb_opps.extend(find_arbitrage(store, event.event_id))
-
-    result.quota_remaining = client.last_quota_remaining
     return result

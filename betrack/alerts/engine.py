@@ -6,11 +6,13 @@ from datetime import datetime, timezone
 
 from betrack.comparison.engine import ArbitrageOpportunity, ValueOpportunity
 
-MIN_EDGE_LIVE = 0.05
-MIN_EDGE_PREMATCH = 0.025
-MIN_PERSISTENCE_LIVE = 2
-MIN_PERSISTENCE_PREMATCH = 3
-COOLDOWN_SECONDS = 300
+# VERIFICATION MODE: thresholds intentionally low so every plausible signal
+# surfaces for inspection. Production values were 5%/2.5% edge and 2/3 cycles.
+MIN_EDGE_LIVE = 0.005
+MIN_EDGE_PREMATCH = 0.005
+MIN_PERSISTENCE_LIVE = 1
+MIN_PERSISTENCE_PREMATCH = 1
+COOLDOWN_SECONDS = 60
 
 
 @dataclass

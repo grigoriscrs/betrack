@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type EventDetail } from "../api";
-import { fmtOdds, fmtPct } from "../format";
+import { ageColor, fmtAge, fmtOdds, fmtPct } from "../format";
 
 interface Props {
   eventId: string | null;
@@ -30,7 +30,7 @@ export function EventDrawer({ eventId, onClose }: Props) {
 
   if (!eventId) return null;
 
-  const books = detail?.bookmakers ?? [];
+  const books = detail?.books ?? [];
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
@@ -42,11 +42,12 @@ export function EventDrawer({ eventId, onClose }: Props) {
         <div className="sticky top-0 bg-slate-950/95 backdrop-blur border-b border-slate-800 px-5 py-4 flex items-start justify-between">
           <div>
             <div className="text-lg font-semibold text-white">
-              {detail?.event_label ?? "Loading…"}
+              {detail?.found ? `${detail.home_team} v ${detail.away_team}` : "Loading…"}
             </div>
-            {detail?.competition && (
+            {detail?.found && (
               <div className="text-xs text-slate-500">
                 {detail.competition} · <span className="uppercase">{detail.status}</span>
+                {detail.sportradar_match_id ? ` · SR ${detail.sportradar_match_id}` : ""}
               </div>
             )}
           </div>
@@ -59,13 +60,13 @@ export function EventDrawer({ eventId, onClose }: Props) {
           {loading && <div className="text-slate-500 text-sm">Loading snapshot…</div>}
           {!loading && detail && !detail.found && (
             <div className="text-slate-500 text-sm">
-              No snapshot available — this event isn't in the current store (it may have expired or
-              the server restarted).
+              No snapshot — this event isn't in the current store (it may have expired or the server
+              restarted).
             </div>
           )}
           {!loading &&
             detail?.markets?.map((m) => (
-              <div key={m.market_label}>
+              <div key={`${m.market_type}:${m.period}:${m.line}`}>
                 <div className="text-sm font-medium text-slate-300 mb-2">{m.market_label}</div>
                 <table className="w-full text-sm">
                   <thead>
@@ -76,37 +77,40 @@ export function EventDrawer({ eventId, onClose }: Props) {
                           {b}
                         </th>
                       ))}
-                      <th className="py-1.5 pr-3 text-right font-medium">Edge</th>
+                      <th className="py-1.5 pr-3 text-right font-medium">Gap</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {m.outcomes.map((o) => {
-                      const best = Math.max(...books.map((b) => o.quotes[b] ?? -Infinity));
-                      return (
-                        <tr key={o.outcome_type} className="border-b border-slate-900">
-                          <td className="py-1.5 pr-3 text-slate-300">{o.outcome_label}</td>
-                          {books.map((b) => {
-                            const v = o.quotes[b];
-                            const isBest = v != null && v === best && books.length > 1;
-                            return (
-                              <td
-                                key={b}
-                                className={`py-1.5 pr-3 text-right ${isBest ? "text-white font-semibold" : "text-slate-400"}`}
-                              >
-                                {fmtOdds(v)}
-                              </td>
-                            );
-                          })}
-                          <td
-                            className={`py-1.5 pr-3 text-right ${
-                              o.edge_pct != null && o.edge_pct >= 0.025 ? "text-emerald-400 font-semibold" : "text-slate-500"
-                            }`}
-                          >
-                            {fmtPct(o.edge_pct)}
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    {m.outcomes.map((o) => (
+                      <tr key={`${o.outcome_type}:${o.line}`} className="border-b border-slate-900">
+                        <td className="py-1.5 pr-3 text-slate-300">{o.label}</td>
+                        {books.map((b) => {
+                          const q = o.quotes[b];
+                          const isBest = o.best === b;
+                          return (
+                            <td key={b} className="py-1.5 pr-3 text-right">
+                              <div className={isBest ? "text-emerald-300 font-semibold" : "text-slate-400"}>
+                                {fmtOdds(q?.odds)}
+                              </div>
+                              {q && (
+                                <div className={`text-[10px] ${ageColor(q.age_seconds)}`}>
+                                  {fmtAge(q.age_seconds)} ago
+                                </div>
+                              )}
+                            </td>
+                          );
+                        })}
+                        <td
+                          className={`py-1.5 pr-3 text-right ${
+                            o.gap_pct != null && o.gap_pct >= 0.03
+                              ? "text-amber-400 font-semibold"
+                              : "text-slate-600"
+                          }`}
+                        >
+                          {fmtPct(o.gap_pct)}
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
